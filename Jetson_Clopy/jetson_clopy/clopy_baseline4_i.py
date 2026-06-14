@@ -88,7 +88,7 @@ BIN_FACTOR = res[0] // BINNED_SIZE  # assuming square (512/128 = 4)
 assert res[0] % BINNED_SIZE == 0 and res[1] % BINNED_SIZE == 0, "resolution must be divisible by BINNED_SIZE"
 # --- END NEW ---
 
-#dff_hostory is in seconds. Multiply with framerate to get array length
+#dff_history is in seconds. Multiply with framerate to get array length
 dffHistory = int(cfgDict['dff_history']) * fr
 anchor = cvui.Point()
 roi_operation_arr = re.split('([-+/%])',cfgDict['roi_operation'])
