@@ -164,7 +164,7 @@ audio_tr_prob = float(config.get(cfg, 'audio'))
 n_tones = int(config.get(cfg, 'n_tones'))
 audiodelay = int(config.get(cfg, 'audio_delay'))
 freqQue = deque(maxlen=(audiodelay*fr)+1)
-freqQue.extend([600]*(audiodelay*fr))
+freqQue.extend([1000]*(audiodelay*fr))
 
 
 # rewarddelay = int(config.get(cfg, 'reward_delay'))
@@ -229,13 +229,14 @@ runRecording = True
 
 ledReward = 12
 ledLightTTL = 13
-
+ledFailTrial = 17
 
 board = pymata4.Pymata4()
 
 
 board.set_pin_mode_digital_output(ledReward)
 board.set_pin_mode_digital_output(ledLightTTL)
+board.set_pin_mode_digital_output(ledFailTrial)
 
 
 
@@ -552,10 +553,10 @@ for session, reward_threshold in sessions:
                     #   'lick' + '\n')
         print("Start recording\n")
         
-    
-    image2 = vs2.get_image()
-    image2 = image2[-res[1]:, -res[0]:]
-    
+    #### NO NEED I GUESS?
+    # image2 = vs2.get_image()
+    # image2 = image2[-res[1]:, -res[0]:]
+    ##### 
     # time.sleep(2)
 
     board.digital_write(ledLightTTL,1)
@@ -572,7 +573,8 @@ for session, reward_threshold in sessions:
     
     ####################
     # get a output stream where we can play samples
-    austream = get_output(channels=n_aud_ch, rate=au_rate, buffersize=1024)
+    #### NEW NEW NEW, CHANGED BUFFERSIZE TO 128 FOR LOWER LATENCY. HOPE IT DOESNT CAUSE UNDERRUNS. CHANGED FROM 128 TO 1024.
+    austream = get_output(channels=n_aud_ch, rate=au_rate, buffersize=128)
     # create one wave sin() at 220Hz, attach it to our speaker, and play
     sinsource = SineSource(austream, 1000)
     sinsource.stop()
@@ -716,10 +718,19 @@ for session, reward_threshold in sessions:
                 else:
                     reward = -1
 
+                    #### NEW NEW NEW, PUNISHMENT ADDED! CHANGE TIME ACCORDINGLY
+                    t2 = threading.Thread(target=blink_led_pymata, args=(ledFailTrial, 0.2))
+                    t2.start()
+                    ####
+
             restTimer = time.time()
 
             if not BASELINE_MODE:
                 sinsource.frequency = freq
+
+                #### NEW NEW NEW, ADDED PRINT FRQ
+                print("\rFreq is: " + str(freq), end="\r", flush=True)
+                ####
 
         else:
             if not rest:
@@ -746,7 +757,9 @@ for session, reward_threshold in sessions:
                     audio = audio_tr_arr[tr]
 
                 if (not BASELINE_MODE) and audio:
-                    austream = get_output(channels=n_aud_ch, rate=au_rate, buffersize=1024)
+                    #### NEW NEW CHANGED 1024 TO 128 FOR LOWER LATENCY. HOPE IT WORKS.
+                    # austream = get_output(channels=n_aud_ch, rate=au_rate, buffersize=1024)
+                    austream = get_output(channels=n_aud_ch, rate=au_rate, buffersize=128)
                     sinsource = SineSource(austream, freq)
                     sinsource.start()
 

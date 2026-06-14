@@ -36,6 +36,7 @@ from audiostream import get_output
 from audiostream.sources.wave import SineSource
 import warnings
 import random as rm
+import pandas as pd
 
 
 # recorded_audio = []
@@ -55,7 +56,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 configPath = '../config.ini'
 config      = ConfigParser()
 config.read(configPath)
-cfg = 'raspicambrain_reward_punish_2roi'
+cfg = 'rpi_2roi'
 cfgDict = dict(config.items(cfg))
 vidSourceName = cfgDict['vid_source']
 data_root   = cfgDict['data_root']
@@ -108,14 +109,38 @@ n_tones = int(config.get(cfg, 'n_tones'))
 audiodelay = int(config.get(cfg, 'audio_delay'))
 freqQue = deque(maxlen=(audiodelay*fr)+1)
 freqQue.extend([1000]*(audiodelay*fr))
-rewarddelay = int(config.get(cfg, 'reward_delay'))
-relAvgDffQue = deque(maxlen=(rewarddelay*fr)+1)
-relAvgDffQue.extend([0]*(rewarddelay*fr))
+
+### CHANGED REWARD DELAY FROM 1 TO 0.2
+# rewarddelay = int(config.get(cfg, 'reward_delay'))
+# relAvgDffQue = deque(maxlen=(rewarddelay*fr)+1)
+# relAvgDffQue.extend([0]*(rewarddelay*fr))
+
+rewarddelay_s = float(config.get(cfg, 'reward_delay'))  # seconds
+rewarddelay_frames = int(round(rewarddelay_s * fr))     # frames
+
+relAvgDffQue = deque(maxlen=rewarddelay_frames + 1)
+relAvgDffQue.extend([0] * rewarddelay_frames)
 
 reward_threshold = float(config.get(cfg, 'reward_threshold'))
 adaptive_threshold = int(config.get(cfg, 'adaptive_threshold'))
 sessionType = clh.SessionType.normal_audio_normal_reward
 # sessionType = clh.SessionType.no_audio_random_reward
+
+
+### NEW, SESSION TYPE, ASK USER
+task_mode = int(input("Baseline (0) or Training (1)?"))
+# ---------------- BASELINE MODE ----------------
+if task_mode == 0: #baseline recording
+    BASELINE_MODE = True   # True = no audio, no reward, no punishment
+    total_trials = 50 #50 trials 20 minutes
+else:
+    BASELINE_MODE = False
+    total_trials = int(cfgDict['total_trials'])
+    # total_trials = 25
+
+BASELINE_LABEL = 'baseline_no_audio_no_reward'
+BASELINE_SUCCESS_REST_DUR = failrest_duration   # keep rest structure simple after "virtual success"
+
 
 # Create I2C bus.
 # i2c = busio.I2C(board.SCL, board.SDA)
@@ -235,18 +260,19 @@ while runPreview:
     dffCorrected = dffGreen - dffBlue
     #dffCorrected = dff
     #dffCorrected = dffGreen
-    
+
     #dffCorrected[dffCorrected >0.05] =1
     #print("Max blue  is: ",np.max(dffBlue))
     lumBlue = image[res[0]//2][0:,0]
     lumGreen = image[res[0]//2][0:,1]
     lumBlue[0] = 1
     lumGreen[0] = 1
+
     cvui.sparkline(image, lumBlue, 0, res[0]-100, res[0], 50, 0x00ff00)
     cvui.sparkline(image, lumGreen, 0, res[0]-100, res[0], 50, 0x00bb00)
     cvui.printf(image, 5, 5, "max lumBlue: %d", max(lumBlue))
     cvui.printf(image, 5, 20, "max lumGreen: %d", max(lumGreen))
-    
+
     # Render the roi
     for roi in rois:
         cv2.rectangle(image, (roi.x, roi.y), (roi.x+roi.w, roi.y+roi.h), roi.color, 1)
@@ -286,6 +312,26 @@ while runPreview:
     #combined = np.concatenate((image, dffCorrected), axis=1)
     # This function must be called *AFTER* all UI components. It does
     # all the behind the scenes magic to handle mouse clicks, etc.
+
+
+    #### NEW NEW NEW ####
+    def roi_max_lum(img, roi):
+        y0 = max(0, roi.y)
+        x0 = max(0, roi.x)
+        y1 = min(img.shape[0], roi.y + roi.h)
+        x1 = min(img.shape[1], roi.x + roi.w)
+        if y1 <= y0 or x1 <= x0:
+            return float('nan')
+        return float(np.max(img[y0:y1, x0:x1]))
+    
+    roi1_max_c = roi_max_lum(image, rois[0])
+    roi2_max_c = roi_max_lum(image, rois[1])
+
+    w = image.shape[1]
+    cvui.printf(image, w - 150, 5, "%s max: %.1f", rois[0].name, roi1_max_c)
+    cvui.printf(image, w - 150, 20, "%s max: %.1f", rois[1].name, roi2_max_c)
+    ########
+
     cvui.update()
     cvui.imshow(WINDOW_NAME, cv2.resize(image,(512,512)));
     cvui.imshow(DFF_WINDOW, cv2.resize(dffCorrected, (512,512)));
@@ -296,6 +342,11 @@ while runPreview:
         runPreview = False
         break
     time.sleep(max(1./fr - (time.time() - start), 0))
+
+    ### NEW NEW
+    print('FPS', round(1 / (time.time() - last_time), 2), end='\r')
+    ####
+
     #vs.camera_factory.updatesleep(max(0.5/(fr) - (time.time() - start), 0.0))
 
 for roi in rois:
@@ -310,13 +361,26 @@ ledLightTTL.off()
 time.sleep(2)
 # Get the current time and initialize the project folder
 tm = datetime.now()
-data_root = data_root + os.sep + mouse_id + os.sep
-data_root = data_root + str(tm.year) + \
+
+
+### NEW NEW NEW
+# data_root = data_root + os.sep + mouse_id + os.sep
+# data_root = data_root + str(tm.year) + \
+#             format(tm.month, '02d') + \
+#             format(tm.day, '02d') + \
+#             format(tm.hour, '02d') + \
+#             format(tm.minute, '02d') + \
+#             format(tm.second, '02d')
+
+data_name = str(tm.year) + \
             format(tm.month, '02d') + \
             format(tm.day, '02d') + \
             format(tm.hour, '02d') + \
             format(tm.minute, '02d') + \
             format(tm.second, '02d')
+data_root = data_root + os.sep + mouse_id + os.sep + data_name
+####
+
 if not os.path.exists(data_root):
         print("Creating data directory: ",data_root)
         os.makedirs(data_root)
@@ -350,7 +414,11 @@ for session, reward_threshold in sessions:
         # save the configuration used in target data directory
         with open(session_root + '/config.ini', 'w', encoding="utf-8") as f:
                 config.write(f)
-        image_hdf5_path = session_root + os.sep + image_stream_filename
+
+        ### NEW NEW NEW
+        image_hdf5_path = session_root + os.sep + mouse_id + '_' + data_name + image_stream_filename
+        # image_hdf5_path = session_root + os.sep + image_stream_filename
+        ####
         image_hdf5_file = tables.open_file(image_hdf5_path, mode='w')
         image_storage = image_hdf5_file.create_earray(image_hdf5_file.root,
                                                       'raw_images',
@@ -359,7 +427,10 @@ for session, reward_threshold in sessions:
 #        frame_storage = image_hdf5_file.create_earray(image_hdf5_file.root,
 #                                                      'frame_n',
 #                                                      tables.Atom.from_dtype(totRewards), (0,))
-        logFileName = session_root + os.sep + "VideoTimestamp.txt"
+        #### NEW NEW NEW
+        #logFileName = session_root + os.sep + "VideoTimestamp.txt"
+        logFileName = session_root + os.sep + mouse_id + '_' + data_name + '.txt'        
+        ####
         logFile = open(logFileName, 'w', encoding="utf-8")
         logFile.write('frame' + '\t' +
                       'time' + '\t' +
@@ -373,7 +444,11 @@ for session, reward_threshold in sessions:
                       'reward' + '\t' +
                       'trial' + '\t' +
                       'audio' + '\t' +
-                      'lick' + '\n')
+                      #### NEW NEW NEW
+                      'tot_rewards' + '\t' +
+                      'baseline_mode' + '\n')
+                    #   'lick' + '\n')
+                    ####
         print("Start recording\n")
         
     ledLightTTL.on()
@@ -399,6 +474,12 @@ for session, reward_threshold in sessions:
     sinsource.stop()
     #############
     
+    #### NEW NEW NEW
+    trial_peak_rel = -np.inf
+    trial_start_time = None
+    baseline_trial_summary = []
+    #####
+
     while image is not None and nTrial <= total_trials:
         start = time.time()
         
@@ -438,16 +519,39 @@ for session, reward_threshold in sessions:
         freq = freqQue.popleft()
         #freq = int(freqs[nTrial-1])
         if runTrial:
+
+            #### NEW NEW NEW
+            # tr = nTrial
+            # rest_duration = failrest_duration
+            # # relative  dff should be greater than the threshold
+            # # and current reward should be atleast 1 sec apart from previous
+            # ## NORMAL REWARDS
+            # if sessionType == clh.SessionType.normal_audio_normal_reward:
+            #     deliverReward = relAvgDffDelayed > reward_threshold
+            # ## RANDOM REWARDS in trial periods
+            # if sessionType == clh.SessionType.no_audio_random_reward:
+            #     deliverReward = np.random.choice(np.arange(0, 2), p=[0.998, 0.002])
+            if trial_start_time is None:
+                trial_start_time = time.time()
+                trial_peak_rel = -np.inf
+
+            if relAvgDffDelayed > trial_peak_rel:
+                trial_peak_rel = relAvgDffDelayed
+
             tr = nTrial
             rest_duration = failrest_duration
-            # relative  dff should be greater than the threshold
-            # and current reward should be atleast 1 sec apart from previous
-            ## NORMAL REWARDS
-            if sessionType == clh.SessionType.normal_audio_normal_reward:
-                deliverReward = relAvgDffDelayed > reward_threshold
-            ## RANDOM REWARDS in trial periods
-            if sessionType == clh.SessionType.no_audio_random_reward:
-                deliverReward = np.random.choice(np.arange(0, 2), p=[0.998, 0.002])
+
+            # default: no real reward delivered
+            deliverReward = False
+
+            if not BASELINE_MODE:
+                if sessionType == clh.SessionType.normal_audio_normal_reward:
+                    deliverReward = relAvgDffDelayed > reward_threshold
+                elif sessionType == clh.SessionType.no_audio_random_reward:
+                    deliverReward = np.random.choice(np.arange(0, 2), p=[0.998, 0.002])
+            
+            ####
+
             if deliverReward:
                 reward = 1
                 totRewards += 1
@@ -458,26 +562,76 @@ for session, reward_threshold in sessions:
                 print("RelAvgDff is: ",relAvgDffDelayed)
                 print("Rew threshold is: ",reward_threshold)
                 print('total rewards: ' + str(totRewards), end="\n")
-                t2 = Thread(target=blink_led, args=(ledReward, 0.3))
+
+                #### KINDA NEW NEW
+                # t2 = Thread(target=blink_led, args=(ledReward, 0.3))
+                t2 = Thread(target=blink_led, args=(ledReward, 0.12))
+                # t2 = threading.Thread(target=blink_led_pymata, args=(ledReward, 0.12))
+                ####
+
                 t2.start()
                 lastRewTime = time.time()
                 runTrial = False
                 rest_duration = successrest_duration
+
+                #### NEW NEW NEW
+                baseline_trial_summary.append({
+                    'trial': tr,
+                    'peak_relAvgDff': trial_peak_rel,
+                    'duration_s': time.time() - trial_start_time
+                })
+                trial_peak_rel = -np.inf
+                trial_start_time = None
+
+                ####
+                
+            #### NEW NEW NEW
+            # elif time.time() - trialTimer >= maxTrialDur:
+            #     runTrial = False
+
+            #     reward = -1
+            #     t2 = Thread(target=blink_led, args=(ledFailTrial, 0.5))
+            #     t2.start()
             
             elif time.time() - trialTimer >= maxTrialDur:
                 runTrial = False
-                reward = -1
-                t2 = Thread(target=blink_led, args=(ledFailTrial, 0.5))
-                t2.start()
+
+                # In baseline mode, trial just times out naturally; don't mark punishment.
+                if BASELINE_MODE:
+                    reward = 0
+                    baseline_trial_summary.append({
+                        'trial': tr,
+                        'peak_relAvgDff': trial_peak_rel,
+                        'duration_s': time.time() - trial_start_time
+                    })
+                    trial_peak_rel = -np.inf
+                    trial_start_time = None
+                else:
+                    reward = -1
+                    t2 = Thread(target=blink_led, args=(ledFailTrial, 0.2))
+                    t2.start()
+
+                #####
+
             restTimer = time.time()
             #play_tone(freq, 0.1, stream)
             #print(f"[DRIVER SET] trial={nTrial} freq_request={freq}")
-            sinsource.frequency = freq
-            print("\rFreq is: " + str(freq), end="\r", flush=True)
+            
+            #### new
+            if not BASELINE_MODE:
+                sinsource.frequency = freq
+                print("\rFreq is: " + str(freq), end="\r", flush=True)
+            ####
         else:
-            if not rest: #trial just ended
-                sinsource.stop()
+            #### NEW NEW NEW
+            # if not rest: #trial just ended
+            #     sinsource.stop()
+            #     print('Trial end')
+            if not rest:
+                if not BASELINE_MODE:
+                    sinsource.stop()
                 print('Trial end')
+            ####
             rest = True
             runTrial = False
 
@@ -490,8 +644,18 @@ for session, reward_threshold in sessions:
             else:
                 rest = False
                 runTrial = True
-                audio = audio_tr_arr[tr]
-                if audio:
+                #### NEW NEW NEW
+                if BASELINE_MODE:
+                    audio = 0
+                else:
+                    audio = audio_tr_arr[tr]
+
+                # audio = audio_tr_arr[tr]
+
+
+                # if audio:
+                if (not BASELINE_MODE) and audio:
+                ##### NEW NEW FINISH
                     austream = get_output(channels=n_aud_ch, rate=au_rate, buffersize=128)
                     #print(f"[DRIVER START] trial={nTrial} freq_request={freq}")
                     sinsource = SineSource(austream, freq)
@@ -531,7 +695,11 @@ for session, reward_threshold in sessions:
                       str(reward) + '\t' +
                       str(tr) + '\t' +
                       str(audio) + '\t' +
-                      str(touch) + '\n')
+                      ### NEW NEW NEW
+                      str(totRewards) + '\t' +
+                      str(int(BASELINE_MODE)) + '\n' )
+                    #   str(touch) + '\n')
+                    #####
         
         #if cvui.button(image, 100, 230, "&Quit"):
         #    break
@@ -548,6 +716,27 @@ for session, reward_threshold in sessions:
         #vs.camera_factory.updatesleep(max(0.5/(fr) - (time.time() - start), 0.0))
         
     ledLightTTL.off()
+
+#### new new new record for some time after
+    t_end = time.time() + 4
+    while time.time() < t_end:
+        start = time.time()
+        image = vs.get_image()
+        fps.update()
+        image_storage.append(image[None])
+        sttime = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
+        logFile.write(str(fps._numFrames) + '\t' +
+                      sttime + '\t' +
+                      str(0) + '\t' +
+                      str(0) + '\t' +
+                      str(0) + '\t' +
+                      str(0) + '\n')
+        k = cv2.waitKey(1)
+        if k == 27:
+            break
+        time.sleep(max(1./fr - (time.time() - start), 0))
+###### new new new finished
+
     fps.stop()
     vs.stop()
     print('total rewards: ' + str(totRewards))
@@ -587,3 +776,9 @@ cv2.destroyAllWindows()
 # audio_data = np.concatenate(recorded_audio, axis = 0)
 # sf.write('raw_tone.wav', audio_data, sample_rate=au_rate, subtype='PCM_16')
 # print(f"[AUDIO_CAPTURE] wrote {len(audio_data)} samples to raw_tone.wav")
+
+#### NEW NEW NEW
+if len(baseline_trial_summary) > 0:
+    baseline_csv = session_root + os.sep + mouse_id + '_' + data_name + '_baseline_trial_summary.csv'
+    pd.DataFrame(baseline_trial_summary).to_csv(baseline_csv, index=False)
+#####
